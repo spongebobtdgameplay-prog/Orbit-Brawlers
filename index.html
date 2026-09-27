@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Orbit Brawlers</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050817;color:#eef4ff;font-family:Inter,system-ui,Segoe UI,sans-serif}
+  canvas{display:block;width:100vw;height:100vh;cursor:crosshair}
+  #hud{position:fixed;inset:0;pointer-events:none;padding:18px}
+  .top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+  .panel{background:rgba(7,12,30,.78);border:1px solid rgba(130,170,255,.2);box-shadow:0 10px 35px rgba(0,0,0,.25);backdrop-filter:blur(8px);border-radius:14px;padding:10px 13px}
+  .title{font-weight:900;letter-spacing:.12em;font-size:14px}
+  .stats{display:flex;gap:16px;font-size:13px;color:#aebbd5}
+  .stats b{color:#fff}
+  #bar{width:220px;height:8px;background:#171d34;border-radius:99px;overflow:hidden;margin-top:7px}
+  #hp{height:100%;width:100%;background:#64e6a4;transition:width .15s}
+  #xpbar{width:220px;height:5px;background:#171d34;border-radius:99px;overflow:hidden;margin-top:5px}
+  #xp{height:100%;width:0;background:#8a7dff}
+  #help{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);color:#7f8ca8;font-size:12px;text-align:center}
+  #screen{position:fixed;inset:0;display:grid;place-items:center;background:rgba(2,4,12,.62);backdrop-filter:blur(5px)}
+  #screen.hidden{display:none}
+  .card{width:min(520px,calc(100vw - 32px));text-align:center;padding:32px;border-radius:22px;background:rgba(10,15,36,.94);border:1px solid rgba(145,170,255,.22);box-shadow:0 30px 90px rgba(0,0,0,.55)}
+  h1{margin:0 0 8px;font-size:42px;letter-spacing:.08em}
+  p{color:#aebbd5;line-height:1.55}
+  button{border:0;border-radius:11px;padding:12px 20px;font-weight:800;color:#07101d;background:#8ef0c0;cursor:pointer}
+  button:hover{filter:brightness(1.08)}
+  .accent{color:#9d91ff}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">
+  <div class="top">
+    <div class="panel">
+      <div class="title">ORBIT <span class="accent">BRAWLERS</span></div>
+      <div id="bar"><div id="hp"></div></div>
+      <div id="xpbar"><div id="xp"></div></div>
+    </div>
+    <div class="panel stats">
+      <span>WAVE <b id="wave">1</b></span>
+      <span>SCORE <b id="score">0</b></span>
+      <span>LEVEL <b id="level">1</b></span>
+      <span>ORBIT <b id="orbit">READY</b></span>
+    </div>
+  </div>
+</div>
+<div id="help">WASD / arrows: move · mouse: aim + shoot · SPACE: dash · Q: orbit burst</div>
+<div id="screen">
+  <div class="card">
+    <h1>ORBIT BRAWLERS</h1>
+    <p id="message">Survive the arena. Destroy drones, collect cores, and use your orbit burst to clear swarms.</p>
+    <button id="start">START BRAWL</button>
+  </div>
+</div>
+<script>
+(() => {
+  const c=document.getElementById('game'),x=c.getContext('2d');
+  const hpEl=document.getElementById('hp'),xpEl=document.getElementById('xp');
+  const waveEl=document.getElementById('wave'),scoreEl=document.getElementById('score'),levelEl=document.getElementById('level'),orbitEl=document.getElementById('orbit');
+  const screen=document.getElementById('screen'),msg=document.getElementById('message'),start=document.getElementById('start');
+  let W,H,dpr,last=0,running=false,score=0,wave=1,level=1,xp=0,nextXp=8,spawnTimer=0,waveTimer=0,shake=0;
+  const keys={},bullets=[],enemies=[],cores=[],particles=[],stars=[];
+  const mouse={x:0,y:0,down:false};
+  const p={x:0,y:0,r:17,hp:100,maxHp:100,speed:270,angle:0,shootCd:0,dashCd:0,orbitCd:0,inv:0};
+
+  function resize(){dpr=Math.min(2,devicePixelRatio||1);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr;c.style.width=W+'px';c.style.height=H+'px';x.setTransform(dpr,0,0,dpr,0,0);if(!p.x){p.x=W/2;p.y=H/2}stars.length=0;for(let i=0;i<130;i++)stars.push({x:Math.random()*W,y:Math.random()*H,s:Math.random()*2+.3,a:Math.random()*.7+.2})}
+  addEventListener('resize',resize);resize();
+  addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.code==='Space'){e.preventDefault();dash()}if(e.key.toLowerCase()==='q')orbitBurst()});
+  addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+  addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY});
+  addEventListener('mousedown',()=>mouse.down=true);addEventListener('mouseup',()=>mouse.down=false);
+  start.onclick=()=>reset();
+
+  function reset(){score=0;wave=1;level=1;xp=0;nextXp=8;spawnTimer=0;waveTimer=0;bullets.length=enemies.length=cores.length=particles.length=0;p.x=W/2;p.y=H/2;p.hp=100;p.maxHp=100;p.speed=270;p.shootCd=p.dashCd=p.orbitCd=0;running=true;screen.classList.add('hidden');last=performance.now();requestAnimationFrame(loop)}
+  function addParticle(px,py,vx,vy,life,size){particles.push({x:px,y:py,vx,vy,life,max:life,size})}
+  function burst(px,py,n=12,force=100){for(let i=0;i<n;i++){let a=Math.random()*Math.PI*2,s=Math.random()*force;addParticle(px,py,Math.cos(a)*s,Math.sin(a)*s,.35+Math.random()*.45,1+Math.random()*3)}}
+  function spawnEnemy(){let side=Math.floor(Math.random()*4),px=side===0? -30:side===1?W+30:Math.random()*W,py=side===2?-30:side===3?H+30:Math.random()*H;let elite=Math.random()<Math.min(.22,wave*.012);enemies.push({x:px,y:py,r:elite?22:15,hp:elite?65+wave*8:24+wave*4,max:elite?65+wave*8:24+wave*4,speed:(elite?70:95)+wave*3,elite,hit:0})}
+  function shoot(){if(p.shootCd>0)return;p.shootCd=.13;let a=Math.atan2(mouse.y-p.y,mouse.x-p.x),speed=720;bullets.push({x:p.x+Math.cos(a)*20,y:p.y+Math.sin(a)*20,vx:Math.cos(a)*speed,vy:Math.sin(a)*speed,r:4,life:1});burst(p.x+Math.cos(a)*18,p.y+Math.sin(a)*18,3,35)}
+  function dash(){if(!running||p.dashCd>0)return;let dx=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0),dy=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0);if(!dx&&!dy){dx=Math.cos(Math.atan2(mouse.y-p.y,mouse.x-p.x));dy=Math.sin(Math.atan2(mouse.y-p.y,mouse.x-p.x))}let len=Math.hypot(dx,dy)||1;dx/=len;dy/=len;p.x=Math.max(25,Math.min(W-25,p.x+dx*150));p.y=Math.max(25,Math.min(H-25,p.y+dy*150));p.dashCd=1.25;p.inv=.28;shake=8;burst(p.x,p.y,18,180)}
+  function orbitBurst(){if(!running||p.orbitCd>0)return;p.orbitCd=4;shake=14;for(let i=0;i<enemies.length;i++){let e=enemies[i],d=Math.hypot(e.x-p.x,e.y-p.y);if(d<180){e.hp-=80+level*10;e.hit=.18;let a=Math.atan2(e.y-p.y,e.x-p.x);e.x+=Math.cos(a)*70;e.y+=Math.sin(a)*70}}burst(p.x,p.y,50,280)}
+  function gainXp(v){xp+=v;while(xp>=nextXp){xp-=nextXp;level++;nextXp=Math.floor(nextXp*1.32);p.maxHp+=8;p.hp=Math.min(p.maxHp,p.hp+25);p.speed+=5;burst(p.x,p.y,25,160)}}
+  function hurt(v){if(p.inv>0)return;p.hp-=v;p.inv=.35;shake=7;burst(p.x,p.y,10,90);if(p.hp<=0)gameOver()}
+  function gameOver(){running=false;screen.classList.remove('hidden');msg.innerHTML='You reached <b>level '+level+'</b> and scored <b>'+score+'</b>.<br>Survive longer by dashing through danger and timing your orbit bursts.';start.textContent='PLAY AGAIN'}
+
+  function update(dt){
+    let dx=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0),dy=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0),len=Math.hypot(dx,dy)||1;
+    if(dx||dy){p.x+=dx/len*p.speed*dt;p.y+=dy/len*p.speed*dt}
+    p.x=Math.max(24,Math.min(W-24,p.x));p.y=Math.max(24,Math.min(H-24,p.y));
+    p.shootCd=Math.max(0,p.shootCd-dt);p.dashCd=Math.max(0,p.dashCd-dt);p.orbitCd=Math.max(0,p.orbitCd-dt);p.inv=Math.max(0,p.inv-dt);
+    if(mouse.down)shoot();
+    spawnTimer-=dt;waveTimer+=dt;
+    if(spawnTimer<=0){spawnEnemy();spawnTimer=Math.max(.16,.72-wave*.018)}
+    if(waveTimer>18){wave++;waveTimer=0;burst(W/2,H/2,35,260)}
+    for(let i=bullets.length-1;i>=0;i--){let b=bullets[i];b.x+=b.vx*dt;b.y+=b.vy*dt;b.life-=dt;if(b.life<0||b.x<-20||b.x>W+20||b.y<-20||b.y>H+20){bullets.splice(i,1);continue}
+      for(let j=enemies.length-1;j>=0;j--){let e=enemies[j];if(Math.hypot(b.x-e.x,b.y-e.y)<b.r+e.r){e.hp-=24+level*2;e.hit=.08;burst(b.x,b.y,4,50);bullets.splice(i,1);if(e.hp<=0){score+=e.elite?50:10;gainXp(e.elite?4:2);if(Math.random()<.55)cores.push({x:e.x,y:e.y,r:7,life:8});burst(e.x,e.y,e.elite?25:12,e.elite?190:110);enemies.splice(j,1)}break}}
+    }
+    for(let i=enemies.length-1;i>=0;i--){let e=enemies[i],a=Math.atan2(p.y-e.y,p.x-e.x),d=Math.hypot(p.x-e.x,p.y-e.y);e.hit=Math.max(0,e.hit-dt);e.x+=Math.cos(a)*e.speed*dt;e.y+=Math.sin(a)*e.speed*dt;if(d<e.r+p.r){hurt(e.elite?28:14);e.x-=Math.cos(a)*35;e.y-=Math.sin(a)*35}}
+    for(let i=cores.length-1;i>=0;i--){let q=cores[i];q.life-=dt;let d=Math.hypot(q.x-p.x,q.y-p.y);if(d<110){q.x+=(p.x-q.x)*dt*5;q.y+=(p.y-q.y)*dt*5}if(d<q.r+p.r){gainXp(2);score+=3;burst(q.x,q.y,7,80);cores.splice(i,1)}else if(q.life<=0)cores.splice(i,1)}
+    for(let i=particles.length-1;i>=0;i--){let q=particles[i];q.x+=q.vx*dt;q.y+=q.vy*dt;q.vx*=.94;q.vy*=.94;q.life-=dt;if(q.life<=0)particles.splice(i,1)}
+    hpEl.style.width=Math.max(0,p.hp/p.maxHp*100)+'%';xpEl.style.width=(xp/nextXp*100)+'%';waveEl.textContent=wave;scoreEl.textContent=score;levelEl.textContent=level;orbitEl.textContent=p.orbitCd>0?p.orbitCd.toFixed(1)+'s':'READY';
+    shake=Math.max(0,shake-dt*25);
+  }
+  function draw(){
+    x.clearRect(0,0,W,H);x.save();if(shake)x.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
+    let g=x.createRadialGradient(W/2,H/2,20,W/2,H/2,Math.max(W,H)*.7);g.addColorStop(0,'#101b3d');g.addColorStop(1,'#050817');x.fillStyle=g;x.fillRect(0,0,W,H);
+    for(const s of stars){x.globalAlpha=s.a;x.fillStyle='#b9c8ff';x.fillRect(s.x,s.y,s.s,s.s)}x.globalAlpha=1;
+    x.strokeStyle='rgba(126,145,255,.08)';x.lineWidth=1;for(let r=90;r<Math.max(W,H);r+=90){x.beginPath();x.arc(p.x,p.y,r,0,Math.PI*2);x.stroke()}
+    x.strokeStyle='rgba(110,140,255,.14)';x.setLineDash([3,10]);x.beginPath();x.arc(p.x,p.y,180,0,Math.PI*2);x.stroke();x.setLineDash([]);
+    for(const q of cores){x.globalAlpha=Math.max(0,q.life/2);x.fillStyle='#72e7ff';x.beginPath();x.arc(q.x,q.y,q.r+Math.sin(performance.now()/100+q.x)*2,0,Math.PI*2);x.fill();x.globalAlpha=1}
+    for(const b of bullets){x.fillStyle='#fff';x.shadowBlur=14;x.shadowColor='#8d9cff';x.beginPath();x.arc(b.x,b.y,b.r,0,Math.PI*2);x.fill();x.shadowBlur=0}
+    for(const e of enemies){x.save();x.translate(e.x,e.y);let a=Math.atan2(p.y-e.y,p.x-e.x);x.rotate(a);x.fillStyle=e.hit>0?'#fff':(e.elite?'#e06cff':'#ff647f');x.beginPath();x.moveTo(e.r+5,0);x.lineTo(-e.r,-e.r*.75);x.lineTo(-e.r*.7,0);x.lineTo(-e.r,e.r*.75);x.closePath();x.fill();x.fillStyle='#070a18';x.beginPath();x.arc(2,0,e.r*.35,0,Math.PI*2);x.fill();x.restore();if(e.elite){x.strokeStyle='rgba(224,108,255,.5)';x.beginPath();x.arc(e.x,e.y,e.r+5,0,Math.PI*2);x.stroke()}}
+    // player + rotating orbit blades
+    let aim=Math.atan2(mouse.y-p.y,mouse.x-p.x);x.save();x.translate(p.x,p.y);x.rotate(aim);
+    x.fillStyle=p.inv>0?'#fff':'#7fe8ff';x.shadowBlur=24;x.shadowColor='#55cfff';x.beginPath();x.moveTo(24,0);x.lineTo(-13,-12);x.lineTo(-7,0);x.lineTo(-13,12);x.closePath();x.fill();x.shadowBlur=0;x.restore();
+    for(let i=0;i<3;i++){let a=performance.now()/550+i*Math.PI*2/3,rr=34;x.fillStyle='#a68cff';x.shadowBlur=12;x.shadowColor='#8b6cff';x.beginPath();x.arc(p.x+Math.cos(a)*rr,p.y+Math.sin(a)*rr,4,0,Math.PI*2);x.fill();x.shadowBlur=0}
+    for(const q of particles){x.globalAlpha=Math.max(0,q.life/q.max);x.fillStyle='#b9c9ff';x.beginPath();x.arc(q.x,q.y,q.size,0,Math.PI*2);x.fill()}x.globalAlpha=1;x.restore();
+  }
+  function loop(t){if(!running)return;let dt=Math.min(.033,(t-last)/1000);last=t;update(dt);draw();requestAnimationFrame(loop)}
+})();
+</script>
+</body>
+</html>
